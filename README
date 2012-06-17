@@ -1,0 +1,11 @@
+Collection of electrical measurement projects and code snippets
+
+== AVR Electrolytic C Meter ==
+Arduino-based capacitance meter, targeted at electrolytic capacitors >1uF
+
+
+
+Author: Dimitar Kovachev, http://lowvoltage.wordpress.com/
+
+Released under the Creative Commons Attribution Share-Alike 3.0 license
+http://creativecommons.org/licenses/by-sa/3.0/
