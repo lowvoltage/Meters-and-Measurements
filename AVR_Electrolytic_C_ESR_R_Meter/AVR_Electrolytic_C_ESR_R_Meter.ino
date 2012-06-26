@@ -10,9 +10,12 @@
 const int chargePin = 6;                      // The constant-current source is controlled by this pin. LOW is charging, HIGH is not-charging
 const int dischargePin = 7;                   // The discharging MOSFET is controlled by this pin. LOW is not-discharging, HIGH is discharging
 const int voltagePin = A0;                    // The capacitor voltage is sampled on this pin
+const int voltageAmpPin = A1;                 // The amplified capacitor voltage is sampled on this pin
 
 const double chargeCurrentMA = 52.6;           // The measured current, provided by the constant current source. Expressed in milli-Amperes.
 const double internalReferenceVoltage = 1.1;  // Arduino's internal ADC reference voltage
+
+const double amplificationFactor = 101.0;
 
 const double targetCapacitorVoltage = 0.2;      // The capacitor will be charged up to this voltage. Expressed in Volts.
 const double openCircuitThresholdVoltage = 0.4; // A voltages above this threshold indicates that a capacitor is NOT present at the test terminals. Expressed in Volts.
@@ -20,6 +23,8 @@ const double openCircuitThresholdVoltage = 0.4; // A voltages above this thresho
 // Map the voltages to [0, 1023] values, for easier analogRead() comparisons.
 const int targetVoltageReading = voltageToReading(targetCapacitorVoltage);
 const int openCircuitVoltageReading = voltageToReading(openCircuitThresholdVoltage);
+
+int zeroVoltAmpReading = 0;
 
 const unsigned long chargeTimeoutUS = 2000000;             // Charging duration limit, in micro-seconds.
 
@@ -40,6 +45,7 @@ void setup()
   digitalWrite(dischargePin, LOW);  // Default state is LOW / not-discharging
 
   pinMode(voltagePin, INPUT);       // Sets the "VOLTAGE" pin as input
+  pinMode(voltageAmpPin, INPUT);       // Sets the "VOLTAGE" pin as input
 
   Serial.begin(9600);               // Initializes serial communication
   
@@ -52,6 +58,9 @@ void setup()
   cbi(ADCSRA,ADPS0);
 
   discharge();
+
+  // Read the (amplified) Op-Amp offest voltage
+  zeroVoltAmpReading = analogRead(voltageAmpPin);
 }
 
 void loop()
@@ -117,7 +126,7 @@ void chargeAndMeasure()
       Serial.print(esrVoltageMV);
       Serial.print(" mV\n");
       Serial.print("ESR=");
-      Serial.print(esr);
+      Serial.print(esr, 4);
       Serial.print(" ohm\n");
       
       Serial.print("V'=");
@@ -134,40 +143,98 @@ void chargeAndMeasure()
 
 void measureESR()
 {
-  digitalWrite(dischargePin, LOW);  // Stop discharging
-  delay(10);
-
-  // Note the moment the charging starts
-  unsigned long startTime = micros();
-  digitalWrite(chargePin, LOW);     // Start charging
-  delayMicroseconds(1);
-  
-  int readings[10]; 
-  unsigned long elapsedTimeUS = 0;
+  // Do an average of 10 readings
+  long accumulator = 0;
   
   for (int i = 0; i < 10; ++i)
   {
-    readings[i] = analogRead(voltagePin);
-  }
-  unsigned long endTime = micros();
+    digitalWrite(dischargePin, LOW);  // Stop discharging
+    delay(10);
 
-  // Report
-  if (readings[0] < openCircuitVoltageReading)
-  {
-    Serial.print("10 ADC readings in ");
-    Serial.print(endTime - startTime);
-    Serial.print(" uS\n");
-
-    for (int i = 0; i < 10; ++i)
+    digitalWrite(chargePin, LOW);     // Start charging
+    delayMicroseconds(1);
+  
+    int currentRead = analogRead(voltagePin);
+    if (currentRead >= openCircuitVoltageReading)
     {
-        Serial.print("Voltage[");
-        Serial.print(i);
-        Serial.print("] = ");
-        Serial.print(readingToVoltage(readings[i]) * 1000.0);
-        Serial.print(" mV");
-        Serial.print("\n");
+      return;    // No capacitor connected
     }
+    
+    accumulator += currentRead;
+    discharge();
   }
+  
+  // Report
+  double avgReading = (double)accumulator / 10.0;
+  double avgVoltageMV = readingToVoltage(avgReading) * 1000.0;
+
+  Serial.print("AvgVoltage = ");
+  Serial.print(avgVoltageMV, 4);
+  Serial.print(" mV");
+  Serial.print("\n");
+  Serial.print("AvgESR = ");
+  Serial.print(avgVoltageMV / chargeCurrentMA, 4);
+  Serial.print(" ohm");
+  Serial.print("\n");
+  
+  if (avgReading <= 10.0)
+  {
+    measureAmpESR();
+  }
+}
+
+void measureAmpESR()
+{
+  // Do an average of 10 readings
+  long accumulator = 0;
+  
+  for (int i = 0; i < 10; ++i)
+  {
+    digitalWrite(dischargePin, LOW);  // Stop discharging
+    delay(10);
+
+    digitalWrite(chargePin, LOW);     // Start charging
+    delayMicroseconds(1);
+  
+    int currentRead = analogRead(voltageAmpPin);
+    if (currentRead >= 1020)  // Saturation
+    {
+      return;    // No capacitor connected
+    }
+    
+    accumulator += currentRead;
+    discharge();
+  }
+  
+  // Report
+  double avgReading = (double)accumulator / 10.0;
+  double normalizedReading = avgReading - zeroVoltAmpReading;
+  double avgVoltageMV = readingToVoltage(normalizedReading) * 1000.0;
+
+
+  Serial.print("zeroVoltAmpReading = ");
+  Serial.print(zeroVoltAmpReading);
+  Serial.print("\n");
+  Serial.print("avgAmpReading = ");
+  Serial.print(avgReading, 2);
+  Serial.print("\n");
+  Serial.print("normalizedReading = ");
+  Serial.print(normalizedReading, 2);
+  Serial.print("\n");
+
+  Serial.print("AvgAmpVoltage = ");
+  Serial.print(avgVoltageMV, 4);
+  Serial.print(" mV");
+  Serial.print("\n");
+  Serial.print("AvgVoltage = ");
+  Serial.print(avgVoltageMV / amplificationFactor, 4);
+  Serial.print(" mV");
+  Serial.print("\n");
+  Serial.print("AvgESR = ");
+  Serial.print((avgVoltageMV / amplificationFactor) / chargeCurrentMA, 4);
+  Serial.print(" ohm");
+  Serial.print("\n");
+
 }
 
 void discharge()
@@ -199,6 +266,11 @@ inline static int voltageToReading(double voltage)
 }
 
 inline static double readingToVoltage(int reading)
+{
+  return reading * (internalReferenceVoltage / 1024.0);
+}
+
+inline static double readingToVoltage(double reading)
 {
   return reading * (internalReferenceVoltage / 1024.0);
 }
